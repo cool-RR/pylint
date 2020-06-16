@@ -75,6 +75,13 @@ def _is_raising(body: typing.List) -> bool:
             return True
     return False
 
+def iterate_parents(node: NodeNG) -> typing.Iterator[NodeNG]:
+    current = node.parent
+    while current is not None:
+        yield current
+        current = current.parent
+
+
 
 OVERGENERAL_EXCEPTIONS = ("BaseException", "Exception")
 BUILTINS_NAME = builtins.__name__
@@ -151,6 +158,11 @@ MSGS = {
         "operator. This is useless because it raises back the exception "
         "immediately. Remove the raise operator or the entire "
         "try-except-raise block!",
+    ),
+    "W0706": (
+        "Title",
+        "raise-missing-from",
+        "Long explanation",
     ),
     "W0711": (
         'Exception to catch is the result of a binary "%s" operation',
@@ -279,14 +291,14 @@ class ExceptionsChecker(checkers.BaseChecker):
         "notimplemented-raised",
         "bad-exception-context",
         "raising-format-tuple",
+        "raise-missing-from",
     )
     def visit_raise(self, node):
         if node.exc is None:
             self._check_misplaced_bare_raise(node)
             return
 
-        if node.cause:
-            self._check_bad_exception_context(node)
+        self._check_exception_cause(node)
 
         expr = node.exc
         ExceptionRaiseRefVisitor(self, node).visit(expr)
@@ -320,16 +332,23 @@ class ExceptionsChecker(checkers.BaseChecker):
         if not current or not isinstance(current.parent, expected):
             self.add_message("misplaced-bare-raise", node=node)
 
-    def _check_bad_exception_context(self, node):
-        """Verify that the exception context is properly set.
+    def _check_exception_cause(self, node):
+        """Verify that the exception cause is properly set.
 
-        An exception context can be only `None` or an exception.
+        An exception cause can be only `None` or an exception.
         """
         cause = utils.safe_infer(node.cause)
-        if cause in (astroid.Uninferable, None):
+        if node.cause is None:
+            for parent in iterate_parents(node):
+                parent: NodeNG
+                if isinstance(parent, astroid.ExceptHandler):
+                    self.add_message("raise-missing-from", node=node)
+                    break
+                elif isinstance(parent, astroid.scoped_nodes.LocalsDictNodeNG):
+                    break
+        elif cause is astroid.Uninferable:
             return
-
-        if isinstance(cause, astroid.Const):
+        elif isinstance(cause, astroid.Const):
             if cause.value is not None:
                 self.add_message("bad-exception-context", node=node)
         elif not isinstance(cause, astroid.ClassDef) and not utils.inherit_from_std_ex(
